@@ -4,6 +4,8 @@
 //   other keys  -> `kv` rows (whole value, last write wins)
 // Every write batch gets a monotonically increasing `seq`; clients pull changes since their last seq.
 
+import { permsFor, canReadColl, canSeeRecord, checkWrite, checkKv } from './permissions.js';
+
 const enc = new TextEncoder();
 const json = (data, status = 200, headers = {}) =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
@@ -72,10 +74,21 @@ async function authenticate(req, env) {
   const u = await env.DB.prepare('SELECT id, username, name, role FROM users WHERE id = ?').bind(p.uid).first();
   if (!u) return null;
   if (u.role !== 'manager') {
-    const rep = await env.DB.prepare("SELECT data, deleted FROM records WHERE coll = 'reps' AND id = ?").bind(u.id).first();
-    if (rep && (rep.deleted || JSON.parse(rep.data || '{}').active === false)) return null;
+    const row = await env.DB.prepare("SELECT data, deleted FROM records WHERE coll = 'reps' AND id = ?").bind(u.id).first();
+    const rep = row && !row.deleted ? JSON.parse(row.data || '{}') : null;
+    // An employee without a team record (or disabled) has no access.
+    if (!rep || rep.active === false) return null;
+    u.rep = rep;
   }
   return u;
+}
+const publicUser = (u) => ({ id: u.id, name: u.name, role: u.role, username: u.username });
+
+/** Ids of merchants assigned to the user — used to scope rows for employees without "viewAll". */
+async function ownClientIds(env, p) {
+  if (p.viewAll) return null;
+  const r = await env.DB.prepare("SELECT id FROM records WHERE coll = 'clients' AND deleted = 0 AND json_extract(data, '$.rep') = ?").bind(p.id).all();
+  return new Set(r.results.map((x) => x.id));
 }
 const isAdmin = (u) => u.role === 'manager' || u.role === 'integration';
 
@@ -106,40 +119,62 @@ async function login(req, env) {
   if (!u || !timingSafeEqual(hash, u.pass_hash)) return fail(401, 'اسم المستخدم أو كلمة المرور غير صحيحة');
   if (u.role !== 'manager') {
     const rep = await env.DB.prepare("SELECT data, deleted FROM records WHERE coll = 'reps' AND id = ?").bind(u.id).first();
-    if (rep && (rep.deleted || JSON.parse(rep.data || '{}').active === false)) return fail(403, 'الحساب معطّل. تواصل مع المدير');
+    if (!rep || rep.deleted || JSON.parse(rep.data || '{}').active === false) return fail(403, 'الحساب معطّل أو غير مرتبط بالفريق. تواصل مع المدير');
   }
   const token = await signToken(env, { uid: u.id, exp: Math.floor(Date.now() / 1000) + SESSION_TTL });
   return json({ user: { id: u.id, name: u.name, role: u.role, username: u.username } }, 200, { 'set-cookie': cookie('zs', token, SESSION_TTL, req) });
 }
 
-async function getState(env) {
+async function getState(env, p) {
   const [recs, kvs, seq, seeded] = await Promise.all([
     env.DB.prepare('SELECT coll, id, data FROM records WHERE deleted = 0').all(),
     env.DB.prepare('SELECT k, v FROM kv').all(),
     currentSeq(env),
     env.DB.prepare("SELECT v FROM meta WHERE k = 'seeded'").first(),
   ]);
+  const own = await ownClientIds(env, p);
   const collections = {};
-  for (const r of recs.results) (collections[r.coll] ||= []).push(JSON.parse(r.data));
+  for (const r of recs.results) {
+    if (!canReadColl(p, r.coll)) continue;
+    const d = JSON.parse(r.data);
+    if (canSeeRecord(p, r.coll, d, own)) (collections[r.coll] ||= []).push(d);
+  }
   const kv = {};
   for (const r of kvs.results) kv[r.k] = JSON.parse(r.v);
   return { seq, seeded: !!seeded, collections, kv };
 }
 
-async function getChanges(env, since) {
+async function getChanges(env, p, since) {
   const [recs, kvs, seq] = await Promise.all([
     env.DB.prepare('SELECT coll, id, data, deleted FROM records WHERE seq > ?').bind(since).all(),
     env.DB.prepare('SELECT k, v FROM kv WHERE seq > ?').bind(since).all(),
     currentSeq(env),
   ]);
+  const own = await ownClientIds(env, p);
+  const ops = [];
+  for (const r of recs.results) {
+    if (!canReadColl(p, r.coll)) continue;
+    if (r.deleted) { ops.push({ c: r.coll, id: r.id, del: true }); continue; }
+    const d = JSON.parse(r.data);
+    // A row that is no longer visible (e.g. merchant reassigned to someone else) is removed on the client.
+    ops.push(canSeeRecord(p, r.coll, d, own) ? { c: r.coll, id: r.id, data: d } : { c: r.coll, id: r.id, del: true });
+  }
   return {
     seq,
-    ops: recs.results.map((r) => (r.deleted ? { c: r.coll, id: r.id, del: true } : { c: r.coll, id: r.id, data: JSON.parse(r.data) })),
+    ops,
     kv: Object.fromEntries(kvs.results.map((r) => [r.k, JSON.parse(r.v)])),
   };
 }
 
-const WRITE_FORBIDDEN_FOR_SALES = new Set(['reps']);
+async function loadOld(env, ops) {
+  const old = new Map();
+  for (let i = 0; i < ops.length; i += 100) {
+    const part = ops.slice(i, i + 100);
+    const res = await env.DB.batch(part.map((o) => env.DB.prepare('SELECT coll, id, data FROM records WHERE coll = ? AND id = ? AND deleted = 0').bind(o.c, o.id)));
+    res.forEach((r) => { const row = r.results[0]; if (row) old.set(row.coll + '/' + row.id, JSON.parse(row.data)); });
+  }
+  return old;
+}
 
 async function applySync(env, user, body) {
   const ops = Array.isArray(body?.ops) ? body.ops : [];
@@ -147,25 +182,48 @@ async function applySync(env, user, body) {
   if (ops.length > MAX_BATCH || Object.keys(kv).length > 100) return fail(413, 'الدفعة كبيرة جداً');
   for (const o of ops) {
     if (!o || !COLL_RE.test(o.c || '') || typeof o.id !== 'string' || !o.id || o.id.length > 128) return fail(400, 'عملية غير صالحة');
-    if (!o.del && (typeof o.data !== 'object' || o.data === null)) return fail(400, 'بيانات غير صالحة');
-    if (!isAdmin(user) && WRITE_FORBIDDEN_FOR_SALES.has(o.c)) return fail(403, 'غير مسموح');
+    if (!o.del && (typeof o.data !== 'object' || o.data === null || Array.isArray(o.data))) return fail(400, 'بيانات غير صالحة');
+    if (!o.del && o.data.id !== o.id) return fail(400, 'معرّف السجل لا يطابق');
   }
   for (const k of Object.keys(kv)) if (!COLL_RE.test(k)) return fail(400, 'مفتاح غير صالح');
-  if (!ops.length && !Object.keys(kv).length && !body?.seed) return json({ seq: await currentSeq(env) });
   if (body?.seed && !isAdmin(user)) return fail(403, 'غير مسموح');
+
+  // Per-op permission check: allowed ops are applied, the rest are reported back so the client restores them.
+  const p = permsFor(user, user.rep);
+  const rejected = [];
+  let accepted = ops;
+  const acceptedKv = {};
+  if (!p.admin) {
+    const old = await loadOld(env, ops);
+    const own = await ownClientIds(env, p);
+    // A merchant created in this same batch counts as the user's own when assigned to them.
+    for (const o of ops) if (o.c === 'clients' && !o.del && o.data.rep === p.id && own) own.add(o.id);
+    const owns = (id) => !own || own.has(id);
+    accepted = [];
+    for (const o of ops) {
+      const verdict = checkWrite(p, o, old.get(o.c + '/' + o.id), owns);
+      if (verdict === null) accepted.push(o);
+      else if (verdict !== 'skip') rejected.push({ c: o.c, id: o.id, error: verdict });
+    }
+  }
+  for (const [k, v] of Object.entries(kv)) {
+    const err = checkKv(p, k);
+    if (err) rejected.push({ k, error: err }); else acceptedKv[k] = v;
+  }
+  if (!accepted.length && !Object.keys(acceptedKv).length && !body?.seed) return json({ seq: await currentSeq(env), rejected });
 
   const seq = await nextSeq(env);
   const stmts = [];
-  for (const o of ops) {
+  for (const o of accepted) {
     if (o.del) stmts.push(env.DB.prepare('INSERT INTO records (coll,id,data,deleted,seq) VALUES (?,?,NULL,1,?) ON CONFLICT(coll,id) DO UPDATE SET data=NULL, deleted=1, seq=excluded.seq').bind(o.c, o.id, seq));
     else stmts.push(env.DB.prepare('INSERT INTO records (coll,id,data,deleted,seq) VALUES (?,?,?,0,?) ON CONFLICT(coll,id) DO UPDATE SET data=excluded.data, deleted=0, seq=excluded.seq').bind(o.c, o.id, JSON.stringify(o.data), seq));
   }
-  for (const [k, v] of Object.entries(kv)) {
+  for (const [k, v] of Object.entries(acceptedKv)) {
     stmts.push(env.DB.prepare('INSERT INTO kv (k,v,seq) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, seq=excluded.seq').bind(k, JSON.stringify(v), seq));
   }
   if (body?.seed) stmts.push(env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES ('seeded', '1')"));
   for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
-  return json({ seq });
+  return json({ seq, rejected });
 }
 
 async function saveUser(env, body) {
@@ -255,9 +313,10 @@ export default {
         if (origin && origin !== url.origin) return fail(403, 'طلب غير مسموح');
       }
 
-      if (path === '/me' && method === 'GET') return json({ user });
-      if (path === '/state' && method === 'GET') return json(await getState(env));
-      if (path === '/changes' && method === 'GET') return json(await getChanges(env, Number(url.searchParams.get('since')) || 0));
+      const perms = permsFor(user, user.rep);
+      if (path === '/me' && method === 'GET') return json({ user: publicUser(user) });
+      if (path === '/state' && method === 'GET') return json(await getState(env, perms));
+      if (path === '/changes' && method === 'GET') return json(await getChanges(env, perms, Number(url.searchParams.get('since')) || 0));
       if (path === '/sync' && method === 'POST') {
         const body = await readJson(req);
         if (!body) return fail(400, 'JSON غير صالح');

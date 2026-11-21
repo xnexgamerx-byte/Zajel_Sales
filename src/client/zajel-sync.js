@@ -106,8 +106,9 @@ window.ZSync = (() => {
         const chunks = Math.max(1, Math.ceil(ops.length / 400));
         for (let i = 0; i < chunks; i++) {
           const part = ops.slice(i * 400, (i + 1) * 400), pkv = i === 0 ? kv : {};
-          await post(part, pkv);
+          const res = await post(part, pkv);
           markSynced(part, pkv);
+          if (res && res.rejected && res.rejected.length) await restoreRejected(res.rejected);
         }
         setStatus(true);
       } while (dirtyAgain);
@@ -117,6 +118,23 @@ window.ZSync = (() => {
       else { setStatus(false); clearTimeout(timer); timer = setTimeout(flush, 5000); }
     } finally { flushing = false; }
   }
+  /** The server refused some edits (permissions): put those items back to the server's version. */
+  async function restoreRejected(rejected) {
+    try { toast(rejected[0].error || 'بعض التعديلات غير مسموحة لحسابك'); } catch (_) {}
+    const state = await api('/state');
+    const live = flat().colls;
+    for (const r of rejected) {
+      if (r.k) { if (r.k in state.kv) { setKv(r.k, state.kv[r.k]); kvSnap[r.k] = JSON.stringify(state.kv[r.k]); } continue; }
+      const server = (state.collections[r.c] || []).find((x) => x && x.id === r.id);
+      let arr = live[r.c];
+      if (!arr) { arr = []; setColl(r.c, arr); live[r.c] = arr; }
+      const i = arr.findIndex((x) => x && x.id === r.id);
+      if (server) { if (i >= 0) arr[i] = server; else arr.unshift(server); (snap[r.c] ||= new Map()).set(r.id, JSON.stringify(server)); }
+      else { if (i >= 0) arr.splice(i, 1); if (snap[r.c]) snap[r.c].delete(r.id); }
+    }
+    try { if (session && !modal && !typing()) render(); } catch (_) {}
+  }
+
   function queue() { clearTimeout(timer); timer = setTimeout(flush, 350); }
 
   async function boot() {

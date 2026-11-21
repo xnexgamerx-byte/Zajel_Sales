@@ -16,9 +16,9 @@
 | `POST /login` `{username,password}` | دخول |
 | `POST /logout` | خروج |
 | `GET /me` | المستخدم الحالي |
-| `GET /state` | كل البيانات: `{seq, seeded, collections, kv}` |
+| `GET /state` | كل البيانات المسموح للمستخدم رؤيتها: `{seq, seeded, collections, kv}` |
 | `GET /changes?since=<seq>` | التغييرات بعد رقم معين: `{seq, ops:[{c,id,data}|{c,id,del:true}], kv}` |
-| `POST /sync` `{ops:[...], kv:{...}}` | كتابة: `{c,id,data}` لإضافة/تعديل، `{c,id,del:true}` لحذف. حتى 500 عملية |
+| `POST /sync` `{ops:[...], kv:{...}}` | كتابة: `{c,id,data}` لإضافة/تعديل، `{c,id,del:true}` لحذف. حتى 500 عملية. الرد `{seq, rejected:[{c,id,error}|{k,error}]}` — العمليات المرفوضة بسبب الصلاحيات تُذكر ولا تُطبَّق |
 | `POST /users` `{id,username,name,password?}` | إنشاء/تعديل حساب موظف (مدير فقط) |
 | `POST /password` `{current,next}` | تغيير كلمة مروري |
 | `POST /files` (جسم الملف + `X-Filename`) | رفع ملف ← `{id}` |
