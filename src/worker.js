@@ -5,6 +5,7 @@
 // Every write batch gets a monotonically increasing `seq`; clients pull changes since their last seq.
 
 import { permsFor, canReadColl, canSeeRecord, checkWrite, checkKv } from './permissions.js';
+import { findDuplicatePhones } from './phones.js';
 
 const enc = new TextEncoder();
 const json = (data, status = 200, headers = {}) =>
@@ -204,6 +205,20 @@ async function applySync(env, user, body) {
       const verdict = checkWrite(p, o, old.get(o.c + '/' + o.id), owns);
       if (verdict === null) accepted.push(o);
       else if (verdict !== 'skip') rejected.push({ c: o.c, id: o.id, error: verdict });
+    }
+  }
+  // Duplicate merchant phones — checked against every merchant, including ones this user can't see.
+  const clientOps = accepted.filter((o) => o.c === 'clients' && !o.del);
+  if (clientOps.length) {
+    const existing = (await env.DB.prepare("SELECT id, json_extract(data, '$.phone') AS phone, json_extract(data, '$.name') AS name, json_extract(data, '$.rep') AS rep FROM records WHERE coll = 'clients' AND deleted = 0").all()).results;
+    const dup = findDuplicatePhones(clientOps, existing, new Map(existing.map((r) => [r.id, r])));
+    if (dup.size) {
+      accepted = accepted.filter((o) => !(o.c === 'clients' && !o.del && dup.has(o.id)));
+      for (const [id, hit] of dup) {
+        const rep = hit.rep && hit.rep !== 'manager' ? await env.DB.prepare("SELECT json_extract(data, '$.name') AS name FROM records WHERE coll = 'reps' AND id = ? AND deleted = 0").bind(hit.rep).first() : null;
+        const who = hit.rep === 'manager' ? ' لدى المدير' : rep?.name ? ` لدى ${rep.name}` : '';
+        rejected.push({ c: 'clients', id, error: `رقم الهاتف مسجل مسبقاً للتاجر «${hit.name || 'بدون اسم'}»${who}. افتح ملفه أو تواصل مع المسؤول بدل التكرار` });
+      }
     }
   }
   for (const [k, v] of Object.entries(kv)) {

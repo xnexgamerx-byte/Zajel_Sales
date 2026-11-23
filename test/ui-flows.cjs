@@ -17,7 +17,9 @@ const ADMIN = process.env.ADMIN_PASSWORD || 'Admin12345!';
   await S.evaluate(() => { window.__rejected = []; const f = window.fetch; window.fetch = async (...a) => { const r = await f(...a); if (String(a[0]).includes('/api/sync')) r.clone().json().then((j) => (j.rejected || []).forEach((x) => window.__rejected.push(x))).catch(() => {}); return r; }; });
   const step = async (name, fn, arg) => { await S.evaluate(fn, arg); await S.evaluate(() => ZSync.flush()); await S.waitForTimeout(100); const rej = await S.evaluate(() => window.__rejected.splice(0)); assert.deepEqual(rej, [], name + ' was refused: ' + JSON.stringify(rej)); console.log('ok:', name); };
 
-  await step('add merchant (form)', () => { const f = document.createElement('form'); for (const [k, v] of Object.entries({ name: 'متجر الورد', phone: '07701234567', city: 'بغداد', orders: '30', category: 'ملابس', source: 'زيارة' })) { const i = document.createElement('input'); i.name = k; i.value = v; f.appendChild(i); } document.body.appendChild(f); submitClient({ preventDefault() {}, target: f, currentTarget: f }); });
+  const phone = '077' + String(Math.floor(Math.random() * 1e8)).padStart(8, '0');
+  const addMerchant = (page, name, ph) => page.evaluate(([name, ph]) => { const f = document.createElement('form'); for (const [k, v] of Object.entries({ name, phone: ph, city: 'بغداد', orders: '30', category: 'ملابس', source: 'زيارة' })) { const i = document.createElement('input'); i.name = k; i.value = v; f.appendChild(i); } document.body.appendChild(f); submitClient({ preventDefault() {}, target: f, currentTarget: f }); }, [name, ph]);
+  await step('add merchant (form)', ([name, ph]) => { const f = document.createElement('form'); for (const [k, v] of Object.entries({ name, phone: ph, city: 'بغداد', orders: '30', category: 'ملابس', source: 'زيارة' })) { const i = document.createElement('input'); i.name = k; i.value = v; f.appendChild(i); } document.body.appendChild(f); submitClient({ preventDefault() {}, target: f, currentTarget: f }); }, ['متجر الورد', phone]);
   const cid = await S.evaluate(() => DB.clients.find((c) => c.name === 'متجر الورد')?.id);
   assert.ok(cid, 'merchant created'); assert.equal(await S.evaluate((id) => getClient(id).rep === session.id, cid), true);
   await step('edit merchant field', (id) => changeField(id, 'city', 'البصرة'), cid);
@@ -29,6 +31,22 @@ const ADMIN = process.env.ADMIN_PASSWORD || 'Admin12345!';
   await step('smart follow-up', (id) => createCadenceTask(id), cid);
   for (const v of await S.evaluate(() => ZJU_VIEWS.map((x) => x[0]).filter((v) => zjuView(v)))) await S.evaluate((v) => go(v), v);
   console.log('ok: opened every screen allowed for the employee');
+
+  // A second employee can't see the first one's merchants, but still can't add the same phone in another format.
+  const user2 = user + 'b';
+  await M.evaluate(async (u) => { const id = uid(); await ZSync.saveUser({ id, username: u, name: 'موظف ثاني', password: 'Passw0rd!x' }); DB.reps.push({ id, name: 'موظف ثاني', username: u, role: 'sales', active: true, preset: 'sales', permissions: zjuClonePreset('sales') }); save(); await ZSync.flush(); }, user2);
+  const S2 = await mk(); await login(S2, user2, 'Passw0rd!x');
+  assert.equal(await S2.evaluate((id) => !!getClient(id), cid), false, 'second employee cannot see the merchant');
+  await S2.evaluate(() => { window.__rejected = []; const f = window.fetch; window.fetch = async (...a) => { const r = await f(...a); if (String(a[0]).includes('/api/sync')) r.clone().json().then((j) => (j.rejected || []).forEach((x) => window.__rejected.push(x))).catch(() => {}); return r; }; });
+  await addMerchant(S2, 'نفس المتجر', '+964 ' + phone.slice(1, 4) + ' ' + phone.slice(4, 7) + ' ' + phone.slice(7));
+  await S2.evaluate(() => ZSync.flush()); await S2.waitForTimeout(300);
+  assert.equal(await S2.evaluate(() => DB.clients.some((c) => c.name === 'نفس المتجر')), false, 'duplicate removed locally');
+  const msgs = await S2.evaluate(() => window.__rejected.map((x) => x.error).join(' | '));
+  assert.match(msgs, /مسجل مسبقاً للتاجر «متجر الورد» لدى موظف الاختبار/, msgs);
+  assert.match(await S2.evaluate(() => document.body.innerText), /مسجل مسبقاً للتاجر/, 'message shown to the employee');
+  await M.evaluate(() => ZSync.pull());
+  assert.equal(await M.evaluate(() => DB.clients.some((c) => c.name === 'نفس المتجر')), false, 'duplicate never reached the server');
+  console.log('ok: duplicate phone (different format, other employee) refused with the owner named');
 
   // manager sees all of it
   await M.evaluate(() => ZSync.pull());

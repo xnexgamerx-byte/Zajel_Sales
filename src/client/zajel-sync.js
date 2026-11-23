@@ -130,7 +130,11 @@ window.ZSync = (() => {
       if (!arr) { arr = []; setColl(r.c, arr); live[r.c] = arr; }
       const i = arr.findIndex((x) => x && x.id === r.id);
       if (server) { if (i >= 0) arr[i] = server; else arr.unshift(server); (snap[r.c] ||= new Map()).set(r.id, JSON.stringify(server)); }
-      else { if (i >= 0) arr.splice(i, 1); if (snap[r.c]) snap[r.c].delete(r.id); }
+      else {
+        if (i >= 0) arr.splice(i, 1); if (snap[r.c]) snap[r.c].delete(r.id);
+        // A refused new merchant may be open in the side drawer; close it so the page doesn't reference a missing record.
+        try { if (r.c === 'clients' && drawerId === r.id) drawerId = null; } catch (_) {}
+      }
     }
     try { if (session && !modal && !typing()) render(); } catch (_) {}
   }
