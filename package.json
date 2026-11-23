@@ -8,7 +8,9 @@
     "deploy": "node scripts/build.mjs && wrangler deploy",
     "db:init": "wrangler d1 migrations apply zajel --local",
     "db:init:remote": "wrangler d1 migrations apply zajel --remote",
-    "test": "node --test test/permissions.test.mjs test/phones.test.mjs && node test/e2e.cjs && node test/ui-flows.cjs && node test/screens.cjs"
+    "test": "node --test test/permissions.test.mjs test/phones.test.mjs test/knowledge.test.mjs && node test/e2e.cjs && node test/ui-flows.cjs && node test/knowledge.cjs && node test/screens.cjs"
   },
-  "devDependencies": { "wrangler": "^4.0.0" }
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
 }

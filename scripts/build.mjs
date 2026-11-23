@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 let html = readFileSync(resolve(root, 'original/zajel-original.html'), 'utf8');
 const syncJs = readFileSync(resolve(root, 'src/client/zajel-sync.js'), 'utf8');
+const knStoreJs = readFileSync(resolve(root, 'src/client/kn-store.js'), 'utf8');
 
 const count = (s, sub) => s.split(sub).length - 1;
 function patch(name, from, to) {
@@ -54,6 +55,7 @@ patchRange('login', 'window.doLogin=async e=>{', 'window.logout=', `window.doLog
   const r=DB.reps.find(x=>x.id===u.id);
   view=zjuView('dashboard')?'dashboard':((r&&r.permissions&&r.permissions.views)||[])[0]||'dashboard';
   render();toast('مرحباً '+session.name);
+  if(zjuView('knowledge'))zkLoad();
  }catch(err){zjuLoginMsg(err.message||'تعذر تسجيل الدخول')}finally{zjuBusy=false}
 };
 `);
@@ -64,6 +66,7 @@ patch('boot-render', '\nrender();\n</script></body></html>', `
 ZSync.restore().then(u=>{
   if(u){const r=DB.reps.find(x=>x.id===u.id);session=u.role==='manager'?{id:'manager',name:u.name||'مدير المبيعات',role:'manager'}:{id:u.id,name:u.name,role:'sales'};view=zjuView('dashboard')?'dashboard':((r&&r.permissions&&r.permissions.views)||[])[0]||'dashboard'}
   render();
+  if(u&&zjuView('knowledge'))zkLoad();
 }).catch(()=>render());
 </script></body></html>`);
 
@@ -98,6 +101,45 @@ patch('import-confirm', "confirm('استبدال بيانات التجربة ا�
 
 patch('topbar-note', '<div class="top-note">نسخة عرض محلية</div>', '<div class="top-note">نظام الفريق</div>');
 patch('lexicon-note', 'التعديلات محفوظة في هذا المتصفح ضمن النسخة التجريبية ويمكن تصديرها مع نسخة JSON', 'التعديلات محفوظة على الخادم ومشتركة مع كل الموظفين ويمكن تصديرها مع نسخة JSON');
+
+// ── 7. Knowledge library: IndexedDB -> shared server storage ───────────────────────────────
+patchRange('kn-storage', 'function openDb(){', 'const hasUsefulText=', knStoreJs + '\n');
+if (html.includes('openDb(')) throw new Error('kn-storage: openDb still referenced');
+patch('kn-exports',
+  'window.ZajelKnowledge={load,snapshot,addFile,analyze,ocrDocument,importInsights,updateDraft,review,saveFacts,removeDocument,exportBackup,importBackup,ruleMatches};',
+  'window.ZajelKnowledge={load,snapshot,addFile:knWrap(addFile),analyze:knWrap(async(id,o)=>{await knEnsurePages(id);return analyze(id,o)}),ocrDocument:knWrap(async(id,o)=>{await knEnsurePages(id);return ocrDocument(id,o)}),importInsights:knWrap(async(id,d)=>{await knEnsurePages(id);return importInsights(id,d)}),updateDraft:knWrap(updateDraft),review:knWrap(review),saveFacts:knWrap(saveFacts),removeDocument:knWrap(removeDocument),exportBackup,importBackup:knWrap(importBackup),ruleMatches,loadPages:knWrap(knEnsurePages),loadAllPages:knWrap(knEnsureAll),reset:knReset};');
+// Load only after login (the server needs a session), and refresh whenever the screen is opened.
+patch('kn-no-preload', "window.addEventListener('DOMContentLoaded',zkLoad,{once:true});", '');
+patch('kn-on-open', "window.go=v=>{if(!zjuView(v)){toast('هذا القسم غير متاح لحسابك');return;}contractPopup=null;view=v;",
+  "window.go=v=>{if(!zjuView(v)){toast('هذا القسم غير متاح لحسابك');return;}contractPopup=null;view=v;if(v==='knowledge')zkLoad();");
+patch('kn-logout', "window.logout=()=>{ZSync.logout();", "window.logout=()=>{ZSync.logout();try{ZajelKnowledge.reset()}catch(_){}");
+patch('kn-show-pages', 'window.zkShowPages=id=>{zkPagesDoc=id;zkPreviewStart=1;render();};',
+  "window.zkShowPages=async id=>{try{await ZajelKnowledge.loadPages(id);zkSync();}catch(e){return toast(e.message)}zkPagesDoc=id;zkPreviewStart=1;render();};");
+patch('kn-export', "window.zkExport=()=>{if(!zkAdmin())return toast('التصدير يتطلب المدير');",
+  "window.zkExport=async()=>{if(!isManager())return toast('التصدير يتطلب المدير');try{await ZajelKnowledge.loadAllPages()}catch(e){return toast(e.message)}");
+// The team screen's knowledge permissions now actually apply (before, every library action was manager-only).
+patch('kn-admin', 'const zkAdmin=()=>isManager();', "const zkAdmin=()=>isManager()||zjuCan('knowledgeManage');");
+patch('kn-approve', "window.zkApprove=async id=>{if(!zkAdmin())return toast('الاعتماد يحتاج صلاحية المدير');",
+  "window.zkApprove=async id=>{if(!(isManager()||zjuCan('knowledgeApprove')))return toast('الاعتماد يحتاج صلاحية «اعتماد رسائل المعرفة»');");
+patch('kn-reject', "window.zkReject=async id=>{if(!zkAdmin())return toast('الرفض يحتاج صلاحية المدير');",
+  "window.zkReject=async id=>{if(!(isManager()||zjuCan('knowledgeApprove')))return toast('الرفض يحتاج صلاحية «اعتماد رسائل المعرفة»');");
+patch('kn-facts', "window.zkSaveFacts=async e=>{e.preventDefault();if(!zkAdmin())return;", "window.zkSaveFacts=async e=>{e.preventDefault();if(!isManager())return toast('الحقائق المعتمدة يعدّلها المدير فقط');");
+patch('kn-delete', "window.zkDeleteDocument=async id=>{if(!zkAdmin())return toast('الحذف يتطلب صلاحية المدير');if(!confirm('حذف الملف وكل أفكاره ومسوداته نهائياً من هذا المتصفح؟'))return;",
+  "window.zkDeleteDocument=async id=>{if(!isManager())return toast('الحذف يتطلب صلاحية المدير');if(!confirm('حذف الملف وكل أفكاره ومسوداته نهائياً من مكتبة الشركة لدى كل الموظفين؟'))return;");
+patch('kn-import', "if(!zkAdmin())return toast('استعادة النسخة تتطلب المدير');", "if(!isManager())return toast('استعادة النسخة تتطلب المدير');");
+patch('kn-text-count', '${zkData.documents.length} ملف في هذا المتصفح', '${zkData.documents.length} ملف في مكتبة الشركة');
+patch('kn-text-storage', 'التخزين داخل هذا المتصفح باستخدام IndexedDB (وقد يُستخدم localStorage كبديل). لا تُشارك البيانات بين الأجهزة، وقد تُفقد بمسح بيانات الموقع. صدّر نسخة احتياطية بانتظام. هذا ليس نظام دخول آمن متعدد المستخدمين.',
+  'المكتبة محفوظة على الخادم ومشتركة بين الموظفين حسب صلاحياتهم، والمعالجة (PDF وOCR) تتم في متصفح من يرفع الملف. صدّر نسخة احتياطية بانتظام.');
+patch('kn-text-import', 'ستحل هذه النسخة محل بيانات مكتبة المعرفة الحالية على هذا المتصفح. متابعة؟', 'ستحل هذه النسخة محل مكتبة المعرفة المشتركة لدى كل الموظفين. متابعة؟');
+patch('kn-text-source-field', 'ملف PDF الأصلي (اختياري إذا كان محفوظاً في هذا المتصفح، إلزامي للكتب المرفوعة قبل التحديث)', 'ملف PDF الأصلي (اختياري إذا كان محفوظاً على الخادم)');
+patch('kn-text-templates', 'أُضيفت إلى قوالب CRM على هذا المتصفح', 'أُضيفت إلى قوالب CRM');
+patch('kn-text-source-missing', 'نسخة PDF الأصلية غير محفوظة على هذا المتصفح. اختر الكتاب نفسه في حقل «ملف PDF الأصلي» ثم جرّب ثانية.', 'نسخة PDF الأصلية غير محفوظة على الخادم. اختر الكتاب نفسه في حقل «ملف PDF الأصلي» ثم جرّب ثانية.');
+
+patch('kn-text-storage-badge', "التخزين: <b>هذا المتصفح</b></span><span>الصلاحية: <b>${zkAdmin()?'مدير':'عرض فقط'}</b></span>",
+  "التخزين: <b>خادم الشركة</b></span><span>الصلاحية: <b>${isManager()?'مدير':zkAdmin()?'تشغيل المكتبة':(zjuCan('knowledgeApprove')?'اعتماد الرسائل':'عرض فقط')}</b></span>");
+
+patch('kn-text-source-fail', 'تعذر حفظ الملف الأصلي بسبب سعة المتصفح؛ اختره مجدداً عند طلب OCR للصفحات.',
+  'تعذر حفظ الملف الأصلي على الخادم (الحد 100 ميغابايت للملف الأصلي، أو انقطع الاتصال)؛ اختره مجدداً عند طلب OCR للصفحات.');
 
 mkdirSync(resolve(root, 'public'), { recursive: true });
 writeFileSync(resolve(root, 'public/index.html'), html);

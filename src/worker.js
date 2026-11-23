@@ -6,6 +6,7 @@
 
 import { permsFor, canReadColl, canSeeRecord, checkWrite, checkKv } from './permissions.js';
 import { findDuplicatePhones } from './phones.js';
+import { handleKnowledge } from './knowledge.js';
 
 const enc = new TextEncoder();
 const json = (data, status = 200, headers = {}) =>
@@ -329,6 +330,7 @@ export default {
       }
 
       const perms = permsFor(user, user.rep);
+      if (path.startsWith('/kn/')) return await handleKnowledge(req, env, perms, path.slice(3));
       if (path === '/me' && method === 'GET') return json({ user: publicUser(user) });
       if (path === '/state' && method === 'GET') return json(await getState(env, perms));
       if (path === '/changes' && method === 'GET') return json(await getChanges(env, perms, Number(url.searchParams.get('since')) || 0));

@@ -23,6 +23,10 @@
 | `POST /password` `{current,next}` | تغيير كلمة مروري |
 | `POST /files` (جسم الملف + `X-Filename`) | رفع ملف ← `{id}` |
 | `GET /files/:id` · `DELETE /files/:id` | تنزيل · حذف (حذف للمدير) |
+| `GET /kn/state` | مكتبة المعرفة: `{documents, ideas, drafts, jobs, facts}` (يتطلب شاشة المكتبة) |
+| `POST /kn/sync` `{ops:[{k,id,data}|{k,id,del:true}], facts?}` | كتابة المكتبة، `k` ∈ documents/ideas/drafts/jobs. الرد `{rejected:[...]}` |
+| `GET /kn/pages/:doc` · `PUT /kn/pages/:doc/:chunk` · `DELETE /kn/pages/:doc` | نص صفحات الكتاب (مقاطع من 50 صفحة) |
+| `GET/PUT/DELETE /kn/source/:doc` | ملف PDF الأصلي (لـ OCR لاحق) |
 | `GET /health` | فحص الحياة |
 
 مثال: إضافة عميل من نظام خارجي
