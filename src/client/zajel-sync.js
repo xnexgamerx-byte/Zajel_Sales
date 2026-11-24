@@ -11,7 +11,7 @@ window.ZSync = (() => {
   // Demo content shipped inside the original HTML. Never published to the server.
   const DEMO_COLLS = ['reps', 'clients', 'activities', 'tasks', 'audit', 'escalations', 'materials', 'smart__quotes', 'smart__enrichments', 'social__campaigns', 'marketing__campaigns', 'marketing__tasks', 'marketing__content', 'marketing__tests'];
   const SEP = '__';
-  let seq = 0, snap = {}, kvSnap = {}, timer = null, flushing = false, dirtyAgain = false, poller = null, online = true, user = null;
+  let seq = 0, snap = {}, kvSnap = {}, timer = null, flushing = false, dirtyAgain = false, poller = null, online = true, user = null, ready = false;
 
   async function api(path, opt = {}) {
     const r = await fetch('/api' + path, { credentials: 'same-origin', ...opt, headers: { 'content-type': 'application/json', ...(opt.headers || {}) } });
@@ -95,7 +95,7 @@ window.ZSync = (() => {
   const post = (ops, kv, seed) => api('/sync', { method: 'POST', body: JSON.stringify({ ops, kv, ...(seed ? { seed: true } : {}) }) });
 
   async function flush() {
-    if (!user) return;
+    if (!user || !ready) return;
     if (flushing) { dirtyAgain = true; return; }
     flushing = true;
     try {
@@ -160,13 +160,14 @@ window.ZSync = (() => {
       seq = state.seq;
       takeSnapshot();
     }
+    ready = true;
     startPolling();
   }
 
   const typing = () => { const a = document.activeElement; return a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); };
 
   async function pull() {
-    if (!user || flushing) return;
+    if (!user || !ready || flushing) return;
     try {
       const ch = await api('/changes?since=' + seq);
       setStatus(true);
@@ -197,21 +198,26 @@ window.ZSync = (() => {
   function startPolling() { clearInterval(poller); poller = setInterval(() => { if (!document.hidden) pull(); }, 8000); }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) pull(); });
   window.addEventListener('pagehide', () => {
-    if (!user) return;
+    if (!user || !ready) return;
     const { ops, kv } = diff();
     if (ops.length || Object.keys(kv).length) { try { fetch('/api/sync', { method: 'POST', keepalive: true, credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ops, kv }) }); } catch (_) {} }
   });
 
-  function logoutLocal() { clearInterval(poller); user = null; try { session = null; view = 'dashboard'; render(); } catch (_) {} }
+  function logoutLocal() { clearInterval(poller); user = null; ready = false; try { session = null; view = 'dashboard'; render(); } catch (_) {} }
 
   return {
     queue, flush, pull,
     get user() { return user; },
-    async login(username, password) { const r = await api('/login', { method: 'POST', body: JSON.stringify({ username, password }) }); user = r.user; return user; },
-    async restore() { try { const r = await api('/me'); user = r.user; await boot(); return user; } catch (_) { user = null; return null; } },
+    async login(username, password) { ready = false; const r = await api('/login', { method: 'POST', body: JSON.stringify({ username, password }) }); user = r.user; return user; },
+    async restore() { ready = false; try { const r = await api('/me'); user = r.user; await boot(); return user; } catch (_) { user = null; ready = false; return null; } },
     boot,
-    async logout() { clearInterval(poller); clearTimeout(timer); try { await flush(); } catch (_) {} try { await api('/logout', { method: 'POST' }); } catch (_) {} user = null; },
+    async logout() { clearInterval(poller); clearTimeout(timer); try { await flush(); } catch (_) {} try { await api('/logout', { method: 'POST' }); } catch (_) {} user = null; ready = false; },
     changePassword: (current, next) => api('/password', { method: 'POST', body: JSON.stringify({ current, next }) }),
+    /** Remove clients, activities, tasks, quotes, campaigns, library materials, audit... Keeps the team (reps), templates and settings. */
+    clearCompanyData() {
+      for (const n of Object.keys(flat().colls)) if (DEMO_COLLS.includes(n) && n !== 'reps') setColl(n, []);
+      if (DB.smart) DB.smart = { ...DB.smart, dailyQuota: {}, routing: {} };
+    },
     saveUser: (u) => api('/users', { method: 'POST', body: JSON.stringify(u) }),
     async uploadFile(file) {
       const r = await fetch('/api/files', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': file.type || 'application/octet-stream', 'x-filename': encodeURIComponent(file.name) }, body: file });
