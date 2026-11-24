@@ -1,15 +1,16 @@
 {
-  // يشير إلى الموقع المنشور حالياً في حسابك (zajel-sales-trial) وقاعدته zajel-trial.
+  // الموقع المنشور في حسابك (False Hardware): الـ Worker zajel-sales-trial وقاعدته zajel-trial.
   "name": "zajel-sales-trial",
-  // الحساب الذي استلمت فيه الموقع (False Hardware). بدونه يختار Wrangler حسابك الأساسي ولا يجد القاعدة.
   "account_id": "1fd0bb805ec0a746cd344372889f700c",
   "main": "src/worker.js",
   "compatibility_date": "2025-09-01",
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
   "d1_databases": [
     { "binding": "DB", "database_name": "zajel-trial", "database_id": "df64f204-cc57-40b6-ab19-f7583f1afb27", "migrations_dir": "migrations" }
+  ],
+  // تخزين الملفات ومكتبة المعرفة. لازم يكون الـ bucket موجوداً قبل النشر:
+  //   npx wrangler r2 bucket create zajel-files
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "zajel-files" }
   ]
-  // بعد تفعيل R2 في حسابك وإنشاء الـ bucket (npx wrangler r2 bucket create zajel-files)،
-  // أضف هذا السطر بعد d1_databases (مع فاصلة) وانشر، فتعمل الملفات ومكتبة المعرفة:
-  // "r2_buckets": [ { "binding": "FILES", "bucket_name": "zajel-files" } ]
 }
