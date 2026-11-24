@@ -1,6 +1,8 @@
 {
   // يشير إلى الموقع المنشور حالياً في حسابك (zajel-sales-trial) وقاعدته zajel-trial.
   "name": "zajel-sales-trial",
+  // الحساب الذي استلمت فيه الموقع (False Hardware). بدونه يختار Wrangler حسابك الأساسي ولا يجد القاعدة.
+  "account_id": "1fd0bb805ec0a746cd344372889f700c",
   "main": "src/worker.js",
   "compatibility_date": "2025-09-01",
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
