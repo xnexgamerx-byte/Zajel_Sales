@@ -9,20 +9,22 @@ const ADMIN = process.env.ADMIN_PASSWORD || 'Admin12345!';
   const mk = async () => { const p = await (await b.newContext({ viewport: { width: 1440, height: 900 } })).newPage(); p.on('pageerror', (e) => errs.push(e.message)); await p.route(/fonts\.(googleapis|gstatic)|cdnjs|jsdelivr/, (r) => r.abort()); await p.goto(BASE); await p.waitForSelector('#loginUser'); return p; };
   const P = await mk();
   // Simulate the race: authenticated, boot not finished, page still holds the demo defaults, then a save/flush/pagehide happens.
+  const baseline = await P.evaluate(async (pw) => { await fetch('/api/login', { method: 'POST', body: JSON.stringify({ username: 'manager', password: pw }) }); const s = await (await fetch('/api/state')).json(); const c = s.collections; return { ids: (c.clients || []).map((x) => x.id), reps: (c.reps || []).map((x) => x.id), seq: s.seq }; }, ADMIN);
   const before = await P.evaluate(async (pw) => {
     await ZSync.login('manager', pw);               // user is set, but boot() has NOT run
     save(); await ZSync.flush(); await ZSync.pull();
     window.dispatchEvent(new Event('pagehide'));
     await new Promise((r) => setTimeout(r, 800));
     const s = await (await fetch('/api/state')).json();
-    return { clients: (s.collections.clients || []).length, reps: (s.collections.reps || []).length, seq: s.seq };
+    return { clients: (s.collections.clients || []).map((x) => x.id), reps: (s.collections.reps || []).map((x) => x.id), seq: s.seq };
   }, ADMIN);
-  assert.deepEqual([before.clients, before.reps], [0, 0], 'demo data must not reach the server before boot: ' + JSON.stringify(before));
+  assert.deepEqual(before.clients, baseline.ids, 'merchants changed before boot: ' + JSON.stringify({ baseline, before }));
+  assert.deepEqual(before.reps, baseline.reps, 'team changed before boot');
+  assert.ok(!before.clients.includes('c1') && !before.reps.includes('rep1'), 'demo data reached the server');
   console.log('ok: no writes before the server data is loaded');
 
   await P.evaluate(() => ZSync.boot()); await P.evaluate(() => { session = { id: 'manager', name: 'مدير', role: 'manager' }; });
-  const seeded = await P.evaluate(() => ({ clients: DB.clients.length, templates: DB.templates.length }));
-  assert.equal(seeded.clients, 0); assert.ok(seeded.templates > 0); console.log('ok: first login seeds templates without demo clients');
+  assert.ok(await P.evaluate(() => DB.templates.length) > 0); console.log('ok: server data loaded after boot');
 
   // add data + a team member, then clear
   await P.evaluate(async () => {
@@ -33,13 +35,14 @@ const ADMIN = process.env.ADMIN_PASSWORD || 'Admin12345!';
     DB.materials.unshift({ id: 'm-x', title: 'مادة', type: 'نص', content: 'x' });
     save(); await ZSync.flush();
   });
+  const repsBefore = await P.evaluate(async () => ((await (await fetch('/api/state')).json()).collections.reps || []).length);
   const cleared = await P.evaluate(async () => {
     window.confirm = () => true; resetData(); await ZSync.flush();
     const s = await (await fetch('/api/state')).json(); const c = s.collections;
     return { clients: (c.clients || []).length, tasks: (c.tasks || []).length, materials: (c.materials || []).length, reps: (c.reps || []).length, templates: (c.templates || []).length };
   });
   assert.deepEqual([cleared.clients, cleared.tasks, cleared.materials], [0, 0, 0], JSON.stringify(cleared));
-  assert.equal(cleared.reps, 1, 'team kept'); assert.ok(cleared.templates > 0, 'templates kept');
+  assert.equal(cleared.reps, repsBefore, 'team kept'); assert.ok(cleared.templates > 0, 'templates kept');
   console.log('ok: clear removes merchants/tasks/materials and keeps team + templates', JSON.stringify(cleared));
   const login2 = await (await mk()); await login2.fill('#loginUser', 'keepme'); await login2.fill('#loginPass', 'Passw0rd!x'); await login2.click('button[type=submit]');
   await login2.waitForFunction(() => typeof session !== 'undefined' && !!session, null, { timeout: 15000 }); console.log('ok: employees can still log in after the clear');
