@@ -6,9 +6,11 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-let html = readFileSync(resolve(root, 'original/zajel-original.html'), 'utf8');
-const syncJs = readFileSync(resolve(root, 'src/client/zajel-sync.js'), 'utf8');
-const knStoreJs = readFileSync(resolve(root, 'src/client/kn-store.js'), 'utf8');
+// Windows checkouts may convert line endings (CRLF); patches are written for LF, so normalise on read.
+const lf = (t) => t.replace(/\r\n?/g, '\n');
+let html = lf(readFileSync(resolve(root, 'original/zajel-original.html'), 'utf8'));
+const syncJs = lf(readFileSync(resolve(root, 'src/client/zajel-sync.js'), 'utf8'));
+const knStoreJs = lf(readFileSync(resolve(root, 'src/client/kn-store.js'), 'utf8'));
 
 const count = (s, sub) => s.split(sub).length - 1;
 function patch(name, from, to) {
