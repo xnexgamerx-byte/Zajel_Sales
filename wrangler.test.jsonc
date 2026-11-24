@@ -1,0 +1,9 @@
+{
+  // للتشغيل والاختبار المحلي فقط: نفس الإعداد مع R2 محاكى محلياً (لا يلمس حسابك).
+  "name": "zajel-sales-local",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "d1_databases": [{ "binding": "DB", "database_name": "zajel-local", "database_id": "local", "migrations_dir": "migrations" }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "zajel-files-local" }]
+}

@@ -27,7 +27,7 @@
 ```bash
 npm install
 npm run db:init
-npm run dev          # http://localhost:8787  (المدير: manager / كلمة المرور من .dev.vars)
+npm run dev          # http://localhost:8787  (المدير: manager / كلمة المرور من .dev.vars). يستخدم wrangler.test.jsonc (R2 محاكى محلياً)
 npm test             # يحتاج السيرفر شغال
 ```
 
