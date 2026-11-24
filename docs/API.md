@@ -13,7 +13,7 @@
 ## النقاط
 | الطلب | الوصف |
 |---|---|
-| `POST /login` `{username,password}` | دخول |
+| `POST /login` `{username,password}` | دخول. بعد 8 محاولات خاطئة يرجع `429` لمدة 15 دقيقة |
 | `POST /logout` | خروج |
 | `GET /me` | المستخدم الحالي |
 | `GET /state` | كل البيانات المسموح للمستخدم رؤيتها: `{seq, seeded, collections, kv}` |
@@ -27,6 +27,7 @@
 | `POST /kn/sync` `{ops:[{k,id,data}|{k,id,del:true}], facts?}` | كتابة المكتبة، `k` ∈ documents/ideas/drafts/jobs. الرد `{rejected:[...]}` |
 | `GET /kn/pages/:doc` · `PUT /kn/pages/:doc/:chunk` · `DELETE /kn/pages/:doc` | نص صفحات الكتاب (مقاطع من 50 صفحة) |
 | `GET/PUT/DELETE /kn/source/:doc` | ملف PDF الأصلي (لـ OCR لاحق) |
+| `GET /backup` · `GET /backups` · `POST /backups/run` | نسخ احتياطي (مدير/مفتاح الربط فقط): تنزيل فوري · قائمة نسخ R2 · تشغيل نسخة الآن |
 | `GET /health` | فحص الحياة |
 
 مثال: إضافة عميل من نظام خارجي

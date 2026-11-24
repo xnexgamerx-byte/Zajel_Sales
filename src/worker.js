@@ -73,8 +73,9 @@ async function authenticate(req, env) {
   }
   const p = await verifyToken(env, getCookie(req, 'zs'));
   if (!p) return null;
-  const u = await env.DB.prepare('SELECT id, username, name, role FROM users WHERE id = ?').bind(p.uid).first();
+  const u = await env.DB.prepare('SELECT id, username, name, role, token_version FROM users WHERE id = ?').bind(p.uid).first().catch(() => env.DB.prepare('SELECT id, username, name, role FROM users WHERE id = ?').bind(p.uid).first());
   if (!u) return null;
+  if ((p.tv || 0) !== (u.token_version || 0)) return null; // password changed/reset elsewhere: this session is no longer valid
   if (u.role !== 'manager') {
     const row = await env.DB.prepare("SELECT data, deleted FROM records WHERE coll = 'reps' AND id = ?").bind(u.id).first();
     const rep = row && !row.deleted ? JSON.parse(row.data || '{}') : null;
@@ -109,21 +110,42 @@ async function ensureAdmin(env) {
     .bind('manager', 'manager', 'مدير المبيعات', 'manager', await pbkdf2(env.ADMIN_PASSWORD, salt), salt, new Date().toISOString()).run();
 }
 
+const MAX_FAILS = 8, WINDOW_S = 15 * 60;
+const clientIp = (req) => req.headers.get('cf-connecting-ip') || 'local';
+// Throttling must never be able to lock everyone out if its table is missing, so every call is best-effort.
+async function throttled(env, key) {
+  try {
+    const r = await env.DB.prepare('SELECT n, first_at FROM login_attempts WHERE k = ?').bind(key).first();
+    return !!r && Math.floor(Date.now() / 1000) - r.first_at < WINDOW_S && r.n >= MAX_FAILS;
+  } catch { return false; }
+}
+async function noteFailure(env, key) {
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    await env.DB.prepare('INSERT INTO login_attempts (k, n, first_at) VALUES (?, 1, ?) ON CONFLICT(k) DO UPDATE SET n = CASE WHEN ? - first_at >= ? THEN 1 ELSE n + 1 END, first_at = CASE WHEN ? - first_at >= ? THEN ? ELSE first_at END')
+      .bind(key, now, now, WINDOW_S, now, WINDOW_S, now).run();
+  } catch { /* best effort */ }
+}
+const clearFailures = (env, key) => env.DB.prepare('DELETE FROM login_attempts WHERE k = ?').bind(key).run().catch(() => {});
+
 async function login(req, env) {
   const body = await readJson(req);
   const username = String(body?.username || '').trim().toLowerCase();
   const password = String(body?.password || '');
   if (!username || !password) return fail(400, 'أدخل اسم المستخدم وكلمة المرور');
   await ensureAdmin(env);
+  const key = clientIp(req) + '|' + username;
+  if (await throttled(env, key)) return fail(429, 'محاولات دخول كثيرة. حاول بعد 15 دقيقة');
   const u = await env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(username).first();
   // Always run a hash so response time doesn't reveal whether the user exists.
   const hash = await pbkdf2(password, u ? u.pass_salt : '00'.repeat(16));
-  if (!u || !timingSafeEqual(hash, u.pass_hash)) return fail(401, 'اسم المستخدم أو كلمة المرور غير صحيحة');
+  if (!u || !timingSafeEqual(hash, u.pass_hash)) { await noteFailure(env, key); return fail(401, 'اسم المستخدم أو كلمة المرور غير صحيحة'); }
+  await clearFailures(env, key);
   if (u.role !== 'manager') {
     const rep = await env.DB.prepare("SELECT data, deleted FROM records WHERE coll = 'reps' AND id = ?").bind(u.id).first();
     if (!rep || rep.deleted || JSON.parse(rep.data || '{}').active === false) return fail(403, 'الحساب معطّل أو غير مرتبط بالفريق. تواصل مع المدير');
   }
-  const token = await signToken(env, { uid: u.id, exp: Math.floor(Date.now() / 1000) + SESSION_TTL });
+  const token = await signToken(env, { uid: u.id, tv: u.token_version || 0, exp: Math.floor(Date.now() / 1000) + SESSION_TTL });
   return json({ user: { id: u.id, name: u.name, role: u.role, username: u.username } }, 200, { 'set-cookie': cookie('zs', token, SESSION_TTL, req) });
 }
 
@@ -258,7 +280,7 @@ async function saveUser(env, body) {
   if (existing) {
     if (password) {
       const salt = randHex(16);
-      await env.DB.prepare('UPDATE users SET username=?, name=?, pass_hash=?, pass_salt=? WHERE id=?').bind(username, name, await pbkdf2(password, salt), salt, id).run();
+      await env.DB.prepare('UPDATE users SET username=?, name=?, pass_hash=?, pass_salt=?, token_version=token_version+1 WHERE id=?').bind(username, name, await pbkdf2(password, salt), salt, id).run();
     } else await env.DB.prepare('UPDATE users SET username=?, name=? WHERE id=?').bind(username, name, id).run();
   } else {
     const salt = randHex(16);
@@ -268,14 +290,16 @@ async function saveUser(env, body) {
   return json({ ok: true });
 }
 
-async function changeOwnPassword(env, user, body) {
+async function changeOwnPassword(req, env, user, body) {
   const cur = String(body?.current || ''), next = String(body?.next || '');
   if (next.length < 8) return fail(400, 'كلمة المرور يجب أن تكون 8 أحرف على الأقل');
   const u = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(user.id).first();
   if (!u || !timingSafeEqual(await pbkdf2(cur, u.pass_salt), u.pass_hash)) return fail(401, 'كلمة المرور الحالية غير صحيحة');
   const salt = randHex(16);
-  await env.DB.prepare('UPDATE users SET pass_hash=?, pass_salt=? WHERE id=?').bind(await pbkdf2(next, salt), salt, user.id).run();
-  return json({ ok: true });
+  const next_tv = (u.token_version || 0) + 1;
+  await env.DB.prepare('UPDATE users SET pass_hash=?, pass_salt=?, token_version=? WHERE id=?').bind(await pbkdf2(next, salt), salt, next_tv, user.id).run();
+  const token = await signToken(env, { uid: user.id, tv: next_tv, exp: Math.floor(Date.now() / 1000) + SESSION_TTL });
+  return json({ ok: true }, 200, { 'set-cookie': cookie('zs', token, SESSION_TTL, req) }); // this device stays signed in; others are signed out
 }
 
 // ---------- files (R2) ----------
@@ -307,8 +331,47 @@ async function downloadFile(env, id) {
   });
 }
 
+
+// ---------- backups ----------
+// Daily JSON snapshot of company data into R2 (kept: last 30). D1 Time Travel remains the primary point-in-time restore.
+// Password hashes are NOT included; after restoring from a JSON snapshot the manager resets employee passwords.
+const BACKUP_KEEP = 30;
+async function buildBackup(env) {
+  const [recs, kvs, kn, users] = await Promise.all([
+    env.DB.prepare('SELECT coll, id, data FROM records WHERE deleted = 0').all(),
+    env.DB.prepare('SELECT k, v FROM kv').all(),
+    env.DB.prepare('SELECT kind, id, data FROM kn_records WHERE deleted = 0').all().catch(() => ({ results: [] })),
+    env.DB.prepare('SELECT id, username, name, role, created_at FROM users').all(),
+  ]);
+  const collections = {};
+  for (const r of recs.results) (collections[r.coll] ||= []).push(JSON.parse(r.data));
+  const knowledge = {};
+  for (const r of kn.results) (knowledge[r.kind] ||= []).push(JSON.parse(r.data));
+  return {
+    version: 1, exported_at: new Date().toISOString(),
+    collections, kv: Object.fromEntries(kvs.results.map((r) => [r.k, JSON.parse(r.v)])),
+    knowledge, users: users.results,
+  };
+}
+async function runBackup(env) {
+  if (!env.FILES) return { skipped: 'no R2 binding' };
+  const day = new Date().toISOString().slice(0, 10);
+  const body = JSON.stringify(await buildBackup(env));
+  await env.FILES.put(`backups/${day}.json`, body, { httpMetadata: { contentType: 'application/json' } });
+  const keys = [];
+  let cursor;
+  do { const l = await env.FILES.list({ prefix: 'backups/', cursor }); keys.push(...l.objects.map((o) => o.key)); cursor = l.truncated ? l.cursor : undefined; } while (cursor);
+  keys.sort();
+  const old = keys.slice(0, Math.max(0, keys.length - BACKUP_KEEP));
+  if (old.length) await env.FILES.delete(old);
+  return { key: `backups/${day}.json`, bytes: body.length, kept: Math.min(keys.length, BACKUP_KEEP) };
+}
+
 // ---------- router ----------
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(runBackup(env).catch((e) => console.error('backup failed', e && e.stack || e)));
+  },
   async fetch(req, env) {
     const url = new URL(req.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
@@ -342,13 +405,27 @@ export default {
       }
       if (path === '/password' && method === 'POST') {
         if (user.role === 'integration') return fail(403, 'غير مسموح');
-        return await changeOwnPassword(env, user, await readJson(req));
+        return await changeOwnPassword(req, env, user, await readJson(req));
       }
       if (path === '/users' && method === 'POST') {
         if (!isAdmin(user)) return fail(403, 'للمدير فقط');
         return await saveUser(env, await readJson(req));
       }
       if (path.startsWith('/files') && !env.FILES) return fail(503, NO_FILES);
+      if (path === '/backup' && method === 'GET') {
+        if (!isAdmin(user)) return fail(403, 'للمدير فقط');
+        return new Response(JSON.stringify(await buildBackup(env)), { headers: { 'content-type': 'application/json; charset=utf-8', 'content-disposition': `attachment; filename="zajel-backup-${new Date().toISOString().slice(0, 10)}.json"`, 'cache-control': 'no-store' } });
+      }
+      if (path === '/backups' && method === 'GET') {
+        if (!isAdmin(user)) return fail(403, 'للمدير فقط');
+        if (!env.FILES) return json({ backups: [] });
+        const l = await env.FILES.list({ prefix: 'backups/' });
+        return json({ backups: l.objects.map((o) => ({ key: o.key, size: o.size, uploaded: o.uploaded })).sort((a, b) => (a.key < b.key ? 1 : -1)) });
+      }
+      if (path === '/backups/run' && method === 'POST') {
+        if (!isAdmin(user)) return fail(403, 'للمدير فقط');
+        return json(await runBackup(env));
+      }
       if (path === '/files' && method === 'POST') return await uploadFile(req, env, user);
       const fm = path.match(/^\/files\/([a-f0-9]{32})$/);
       if (fm && method === 'GET') return await downloadFile(env, fm[1]);

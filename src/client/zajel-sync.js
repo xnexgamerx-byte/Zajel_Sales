@@ -9,7 +9,7 @@
  */
 window.ZSync = (() => {
   // Demo content shipped inside the original HTML. Never published to the server.
-  const DEMO_COLLS = ['reps', 'clients', 'activities', 'tasks', 'audit', 'escalations', 'materials', 'smart__quotes', 'smart__enrichments', 'social__campaigns', 'marketing__campaigns', 'marketing__tasks', 'marketing__content', 'marketing__tests'];
+  const DEMO_COLLS = ['reps', 'clients', 'activities', 'tasks', 'audit', 'escalations', 'smart__quotes', 'smart__enrichments', 'social__campaigns', 'marketing__campaigns', 'marketing__tasks', 'marketing__content', 'marketing__tests'];
   const SEP = '__';
   let seq = 0, snap = {}, kvSnap = {}, timer = null, flushing = false, dirtyAgain = false, poller = null, online = true, user = null, ready = false;
 
@@ -147,6 +147,7 @@ window.ZSync = (() => {
       // First run: publish built-in templates/playbooks (not the demo clients) so every employee sees the same content.
       for (const n of Object.keys(flat().colls)) if (DEMO_COLLS.includes(n)) setColl(n, []);
       if (DB.smart) DB.smart = { ...DB.smart, dailyQuota: {}, routing: {} };
+      if (DB.marketing) DB.marketing.demo = false; // demo campaign numbers were removed above
       snap = {}; kvSnap = {};
       const { ops, kv } = diff();
       await post([], kv, true);
@@ -213,10 +214,11 @@ window.ZSync = (() => {
     boot,
     async logout() { clearInterval(poller); clearTimeout(timer); try { await flush(); } catch (_) {} try { await api('/logout', { method: 'POST' }); } catch (_) {} user = null; ready = false; },
     changePassword: (current, next) => api('/password', { method: 'POST', body: JSON.stringify({ current, next }) }),
-    /** Remove clients, activities, tasks, quotes, campaigns, library materials, audit... Keeps the team (reps), templates and settings. */
+    /** Remove clients, activities, tasks, quotes, campaigns, escalations, audit... Keeps the team (reps), templates, library materials and settings. */
     clearCompanyData() {
       for (const n of Object.keys(flat().colls)) if (DEMO_COLLS.includes(n) && n !== 'reps') setColl(n, []);
       if (DB.smart) DB.smart = { ...DB.smart, dailyQuota: {}, routing: {} };
+      if (DB.marketing) DB.marketing.demo = false;
     },
     saveUser: (u) => api('/users', { method: 'POST', body: JSON.stringify(u) }),
     async uploadFile(file) {

@@ -4,6 +4,7 @@
   "account_id": "1fd0bb805ec0a746cd344372889f700c",
   "main": "src/worker.js",
   "compatibility_date": "2025-09-01",
+  "triggers": { "crons": ["0 1 * * *"] },
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
   "d1_databases": [
     { "binding": "DB", "database_name": "zajel-trial", "database_id": "df64f204-cc57-40b6-ab19-f7583f1afb27", "migrations_dir": "migrations" }
