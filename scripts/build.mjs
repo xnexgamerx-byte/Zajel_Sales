@@ -156,6 +156,35 @@ window.savePassword=async e=>{e.preventDefault();if(zjuBusy)return;const d=dataF
  zjuBusy=true;try{await ZSync.changePassword(d.current,d.next);modal='';render();toast('تم تغيير كلمة المرور')}catch(err){say(err.message||'تعذر تغيير كلمة المرور')}finally{zjuBusy=false}};
 function loginPage(){return \``);
 
+// ── 9. Wording that stopped being true once the data moved to the shared server ────────────
+// (Business disclaimers the owner wrote — quote price warning, demo campaign numbers — are left alone.)
+function patchAll(name, from, to, expected) {
+  const n = count(html, from);
+  if (n !== expected) throw new Error(`Patch "${name}": expected ${expected} matches, found ${n}`);
+  html = html.split(from).join(to);
+}
+patch('txt-stage-templates', 'تُحفظ القوالب داخل بيانات النموذج التجريبي في هذا المتصفح.', 'تُحفظ القوالب على الخادم وتظهر لكل الموظفين.');
+patch('txt-consent-toast', "toast('حُفظ إذن التواصل في هذا المتصفح')", "toast('حُفظ إذن التواصل')");
+patch('txt-perm-toast', 'هذه العملية غير متاحة ضمن صلاحيات حسابك التجريبي', 'هذه العملية غير متاحة ضمن صلاحيات حسابك');
+patch('txt-team-sub', 'إدارة حسابات الموظفين التجريبية وصلاحيات الأقسام والإجراءات.', 'إدارة حسابات الموظفين وصلاحيات الأقسام والإجراءات.');
+patch('txt-new-account-title', "'إضافة موظف وحساب دخول تجريبي'", "'إضافة موظف وحساب دخول'");
+patch('txt-new-account-btn', "'إنشاء حساب تجريبي'", "'إنشاء حساب'");
+patch('txt-team-hint', 'إدارة الفريق محصورة دائماً بحساب المدير التجريبي، حتى لو تم تعديل البيانات يدوياً.', 'إدارة الفريق محصورة دائماً بحساب المدير، ويتحقق السيرفر من ذلك.');
+patchAll('txt-reset-label', 'إعادة ضبط البيانات التجريبية', 'مسح جميع بيانات الشركة', 2);
+patch('txt-reset-toast', "toast('تم إعادة البيانات التجريبية')", "toast('تم مسح بيانات الشركة')");
+patch('txt-mk-disclaimer', 'النسخة تجريبية محلية: لا نشر آلي،', 'ملاحظة: لا نشر آلي،');
+patch('txt-import-limit', "'حد النسخة التجريبية 500 سطر في المرة'", "'الحد الأقصى 500 سطر في المرة'");
+patch('txt-security-panel', 'تسجيل دخول حقيقي من السيرفر مع تجزئة قوية لكلمات المرور، جلسات آمنة HTTP-only، صلاحيات يتحقق منها السيرفر لكل طلب، سجل تدقيق، نسخ احتياطية مشفرة، تشفير الاتصال HTTPS، سياسات احتفاظ بالتسجيلات، وحدود أحجام للرفع.',
+  'مُفعّل: تسجيل دخول من السيرفر مع تجزئة كلمات المرور، جلسات HTTP-only، صلاحيات يتحقق منها السيرفر لكل طلب، سجل تدقيق، وتشفير الاتصال HTTPS. المتبقي: نسخ احتياطية تلقائية، وسياسة احتفاظ بالتسجيلات.');
+patch('txt-security-title', '<div class="panel-title">الأمان المطلوب للإنتاج</div>', '<div class="panel-title">حالة الأمان</div>');
+patch('txt-audit-note', 'سجل المتصفح هنا تجريبي وقابل للتعديل أو الحذف. في النسخة الإنتاجية يجب أن يكون سجل التدقيق على الخادم بصلاحيات صارمة وتخزين مناسب.',
+  'سجل التدقيق محفوظ على الخادم، ولا يستطيع الموظفون تعديله أو حذفه، ويُحتفظ بآخر 150 إجراءً.');
+patch('txt-library-note', 'المواد النصية محفوظة محلياً في المتصفح. الملفات المرفوعة في النموذج تحفظ محلياً باستخدام IndexedDB (حتى 5 ميغابايت للملف)، ولا يراها باقي الموظفين على أجهزة أخرى.',
+  'المواد النصية والملفات المرفوعة محفوظة على الخادم ويراها الموظفون حسب صلاحياتهم (حتى 5 ميغابايت للملف).');
+patch('txt-pdf-note', 'إصدار PDF معتمد تلقائي غير متاح في النموذج التجريبي.', 'إصدار PDF معتمد تلقائي غير متاح في هذه النسخة.');
+patch('txt-kn-loading', 'جارٍ تحميل المكتبة المحلية…', 'جارٍ تحميل المكتبة…');
+patch('txt-ask-note', 'اختر أحد الأسئلة لعرض الإجابة معتمدة على بيانات العرض التجريبي.', 'اختر أحد الأسئلة لعرض الإجابة معتمدة على بيانات CRM.');
+
 mkdirSync(resolve(root, 'public'), { recursive: true });
 writeFileSync(resolve(root, 'public/index.html'), html);
 console.log(`built public/index.html (${(html.length / 1024).toFixed(0)} KB)`);
