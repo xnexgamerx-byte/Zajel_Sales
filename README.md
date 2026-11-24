@@ -31,6 +31,25 @@ npm run dev          # http://localhost:8787  (المدير: manager / كلمة 
 npm test             # يحتاج السيرفر شغال
 ```
 
+## تحديث الموقع المنشور (من جهازك)
+الإعداد الحالي في `wrangler.jsonc` يشير إلى موقعك `zajel-sales-trial` وقاعدته `zajel-trial` في حسابك. كلمات سر النظام (`SESSION_SECRET`, `ADMIN_PASSWORD`) محفوظة هناك ولا تتأثر بالنشر.
+
+أول مرة فقط (يلزم Node.js 20+ وGit):
+```bash
+git clone https://github.com/xnexgamerx-byte/Zajel_Sales
+cd Zajel_Sales
+git checkout claude/inspiring-ritchie-joroe9
+npm install
+npx wrangler login
+```
+كل تحديث بعدها:
+```bash
+git pull
+npm install
+npm run deploy
+```
+وإذا أضفت التحديث ملف جديد في `migrations/` شغّل قبل النشر: `npm run db:init:remote`.
+
 ## النشر على Cloudflare (مرة واحدة)
 ```bash
 npx wrangler login
