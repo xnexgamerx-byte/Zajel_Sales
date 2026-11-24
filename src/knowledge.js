@@ -96,6 +96,8 @@ export async function handleKnowledge(req, env, p, path) {
     return sync(env, k, body);
   }
 
+  if ((path.startsWith('/pages/') || path.startsWith('/source/')) && !env.FILES) return fail(503, 'تخزين الملفات غير مفعّل في هذه النسخة التجريبية');
+
   let r = path.match(/^\/pages\/([A-Za-z0-9_-]{1,100})$/);
   if (r && m === 'GET') {
     const pages = [];

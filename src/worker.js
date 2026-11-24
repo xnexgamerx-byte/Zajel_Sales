@@ -280,6 +280,7 @@ async function changeOwnPassword(env, user, body) {
 
 // ---------- files (R2) ----------
 const MAX_FILE = 100 * 1024 * 1024;
+const NO_FILES = 'تخزين الملفات غير مفعّل في هذه النسخة التجريبية';
 async function uploadFile(req, env, user) {
   const name = decodeURIComponent(req.headers.get('x-filename') || 'file');
   const type = req.headers.get('content-type') || 'application/octet-stream';
@@ -347,6 +348,7 @@ export default {
         if (!isAdmin(user)) return fail(403, 'للمدير فقط');
         return await saveUser(env, await readJson(req));
       }
+      if (path.startsWith('/files') && !env.FILES) return fail(503, NO_FILES);
       if (path === '/files' && method === 'POST') return await uploadFile(req, env, user);
       const fm = path.match(/^\/files\/([a-f0-9]{32})$/);
       if (fm && method === 'GET') return await downloadFile(env, fm[1]);
