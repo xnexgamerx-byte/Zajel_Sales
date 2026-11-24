@@ -141,6 +141,19 @@ patch('kn-text-storage-badge', "التخزين: <b>هذا المتصفح</b></sp
 patch('kn-text-source-fail', 'تعذر حفظ الملف الأصلي بسبب سعة المتصفح؛ اختره مجدداً عند طلب OCR للصفحات.',
   'تعذر حفظ الملف الأصلي على الخادم (الحد 100 ميغابايت للملف الأصلي، أو انقطع الاتصال)؛ اختره مجدداً عند طلب OCR للصفحات.');
 
+// ── 8. Change my own password (the account chip in the top bar opens the dialog) ───────────
+patch('modal-password-hook', "function modalPage(){if(modal.startsWith('soc'))return socialModal();",
+  "function modalPage(){if(modal==='changePassword')return pwdModal();if(modal.startsWith('soc'))return socialModal();");
+patch('profile-chip', '<div class="profile-mini"><div class="avatar">',
+  '<div class="profile-mini" role="button" tabindex="0" style="cursor:pointer" title="تغيير كلمة المرور" onclick="openPassword()" onkeydown="if(event.key===\'Enter\')openPassword()"><div class="avatar">');
+patch('password-ui', 'function loginPage(){return `', `window.openPassword=()=>{modal='changePassword';render()};
+function pwdModal(){return \`<div class="modal-bg" onclick="closeModal()"><div class="modal" onclick="event.stopPropagation()"><div class="drawer-head"><h3 class="modal-title">تغيير كلمة المرور</h3><button class="icon-btn" onclick="closeModal()">×</button></div><form onsubmit="savePassword(event)"><div class="fields"><div class="field wide"><label>كلمة المرور الحالية</label><input class="input" type="password" name="current" autocomplete="current-password" required dir="ltr"></div><div class="field wide"><label>كلمة المرور الجديدة (8 أحرف على الأقل)</label><input class="input" type="password" name="next" autocomplete="new-password" minlength="8" required dir="ltr"></div><div class="field wide"><label>تأكيد كلمة المرور الجديدة</label><input class="input" type="password" name="again" autocomplete="new-password" minlength="8" required dir="ltr"></div></div><div id="pwd-msg" class="zju-login-alert" role="alert" hidden></div><div class="actions" style="margin-top:16px"><button class="btn coral" type="submit">حفظ كلمة المرور</button><button class="btn outline" type="button" onclick="closeModal()">إلغاء</button></div></form></div></div>\`}
+window.savePassword=async e=>{e.preventDefault();if(zjuBusy)return;const d=dataForm(e),msg=document.getElementById('pwd-msg'),say=t=>{msg.textContent=t;msg.hidden=false};
+ if(d.next!==d.again)return say('كلمتا المرور الجديدتان غير متطابقتين');
+ if(d.next===d.current)return say('اختر كلمة مرور مختلفة عن الحالية');
+ zjuBusy=true;try{await ZSync.changePassword(d.current,d.next);modal='';render();toast('تم تغيير كلمة المرور')}catch(err){say(err.message||'تعذر تغيير كلمة المرور')}finally{zjuBusy=false}};
+function loginPage(){return \``);
+
 mkdirSync(resolve(root, 'public'), { recursive: true });
 writeFileSync(resolve(root, 'public/index.html'), html);
 console.log(`built public/index.html (${(html.length / 1024).toFixed(0)} KB)`);

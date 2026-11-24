@@ -211,6 +211,7 @@ window.ZSync = (() => {
     async restore() { try { const r = await api('/me'); user = r.user; await boot(); return user; } catch (_) { user = null; return null; } },
     boot,
     async logout() { clearInterval(poller); clearTimeout(timer); try { await flush(); } catch (_) {} try { await api('/logout', { method: 'POST' }); } catch (_) {} user = null; },
+    changePassword: (current, next) => api('/password', { method: 'POST', body: JSON.stringify({ current, next }) }),
     saveUser: (u) => api('/users', { method: 'POST', body: JSON.stringify(u) }),
     async uploadFile(file) {
       const r = await fetch('/api/files', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': file.type || 'application/octet-stream', 'x-filename': encodeURIComponent(file.name) }, body: file });
